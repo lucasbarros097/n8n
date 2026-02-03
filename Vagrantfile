@@ -2,41 +2,33 @@ Vagrant.configure("2") do |config|
   config.vm.box = "bento/ubuntu-24.04"
   config.vm.hostname = "n8n-server"
 
-  # Interface de rede pública (Bridge) conectada ao seu Wi-Fi
+  # Interface de rede (Bridge)
   config.vm.network "public_network", ip: "192.168.15.48", bridge: "wlp4s0"
 
   config.vm.provider "virtualbox" do |vb|
     vb.name = "n8n-server"
-    vb.memory = "8192"
-    vb.cpus = 4
-    # Resolve problemas de DNS repassando a query para o host
+    vb.memory = "4096"
+    vb.cpus = 2
     vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
-    vb.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
   end
 
+  # Configuração do servidor e do serviço n8n
   config.vm.provision "shell", inline: <<-SHELL
-    export DEBIAN_FRONTEND=noninteractive
+    set -e # Faz o script parar imediatamente se houver erro
 
-    # 1. Desabilita IPv6 (evita lentidão e erros de rede)
-    sysctl -w net.ipv6.conf.all.disable_ipv6=1
-    sysctl -w net.ipv6.conf.default.disable_ipv6=1
+    # 1. Configuração de DNS estável
+    echo "nameserver 1.1.1.1" > /etc/resolv.conf
 
-    # 2. Configura DNS ultra-estável
-    echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
-
-    # 3. CORREÇÃO DE ROTA (Evita o Timeout do Docker)
-    # Garante que a saída padrão seja o NAT do VirtualBox durante o setup
-    ip route del default || true
-    ip route add default via 10.0.2.2 dev eth0 || true
-
-    # 4. Instalação do Docker e Compose
-    echo "Instalando Docker..."
+    # 2. Instalação do Docker (Versão correta para Ubuntu 24.04)
+    echo "Instalando Docker e Plugins..."
     apt-get update -y
     apt-get install -y docker.io docker-compose-v2
-    systemctl start docker
-    chmod 666 /var/run/docker.sock
+    
+    # Garante que o serviço suba e o usuário tenha permissão
+    systemctl enable --now docker
+    usermod -aG docker vagrant
 
-    # 5. Configuração do n8n na porta 81
+    # 3. Criação do diretório e do arquivo Compose
     mkdir -p /home/vagrant/n8n-deploy
     cat <<EOF > /home/vagrant/n8n-deploy/docker-compose.yml
 services:
@@ -56,21 +48,14 @@ volumes:
   n8n_data:
 EOF
 
-    # 6. Pull e Up com Retry
+    # 4. Inicialização do n8n
     cd /home/vagrant/n8n-deploy
-    echo "Baixando imagem do n8n..."
-    until docker compose pull; do
-      echo "Tentativa de download falhou, tentando novamente em 5 segundos..."
-      sleep 5
-    done
-
+    echo "Baixando e iniciando n8n..."
+    # Usamos 'docker compose' (sem hífen) que é o padrão da v2
     docker compose up -d
 
-    # 7. Garante que a rede local (.15.0) saiba onde encontrar a VM
-    ip route add 192.168.15.0/24 dev eth1 || true
-
-    echo "------------------------------------------------------"
-    echo "Sucesso! Acesse: http://192.168.15.48:81"
-    echo "------------------------------------------------------"
+    echo "------------------------------------"
+    echo " http://192.168.15.48:81 "
+    echo "------------------------------------"
   SHELL
 end
